@@ -1,28 +1,33 @@
 #include <Wire.h>
-#include <Adafruit_Sensor.h>
-#include <Adafruit_BME280.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
 
-#define I2C_SDA 18
-#define I2C_SCL 17
+#define SCREEN_WIDTH  128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET    -1
+#define SCREEN_ADDR   0x3C
 
-Adafruit_BME280 bme;
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 void setup() {
   Serial.begin(115200);
-  while (!Serial);
+  Wire.begin(18, 17);                     // SDA=18, SCL=17
 
-  Wire.begin(I2C_SDA, I2C_SCL);
-  if (!bme.begin(0x76, &Wire)) {
-    Serial.println("BME280 init failed");
-    while (1);
+  if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDR)) {
+    Serial.println("SSD1306 init failed");
+    for (;;);
   }
-  Serial.println("BME280 OK");
+
+  display.clearDisplay();
+  display.setTextSize(2);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(10, 25);
+  display.println("Hello");
+  display.setCursor(10, 45);
+  display.println("World!");
+  display.display();
 }
 
 void loop() {
-  Serial.print("T: "); Serial.print(bme.readTemperature());  Serial.println(" C");
-  Serial.print("H: "); Serial.print(bme.readHumidity());     Serial.println(" %");
-  Serial.print("P: "); Serial.print(bme.readPressure() / 100.0F); Serial.println(" hPa");
-  Serial.println("-----");
   delay(1000);
 }
