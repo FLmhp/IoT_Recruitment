@@ -1,151 +1,85 @@
 #include <WiFi.h>
-#include <WebServer.h>
-#include <Wire.h>
-#include <Adafruit_Sensor.h>
-#include <Adafruit_BME280.h>
-#include <Adafruit_SSD1306.h>
+#include <WiFiClientSecure.h>
+#include <PubSubClient.h>
 
-#define LED_PIN 45
-#define SCREEN_WIDTH 128
-#define SCREEN_HEIGHT 64
-#define OLED_RESET -1
-
-Adafruit_SSD1306 oled(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
-Adafruit_BME280  bme;
 const char* ssid     = "CMCC-aquk";
 const char* password = "wfv5kabh";
-WebServer server(80);
 
-float t, h, p;
-bool  ledState = false;
-unsigned long lastSensor = 0;
-const unsigned long SENSOR_PERIOD = 1000;
+const char* mqtt_server = "n7e64e62.ala.cn-hangzhou.emqxsl.cn";
+const int   mqtt_port   = 8883;
 
-void readSensor();
-void oledShow();
-void handleRoot();
-void handleLedOn();
-void handleLedOff();
-void handleAjax();
+const char* mqtt_user = "admin";
+const char* mqtt_pass = "admin";
+const char* client_id = "ESP32-S3-Client-001";
 
-void setup() {
-  Serial.begin(115200);
-  pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, LOW);
+const char* topic_pub = "esp32/s3/data";
+const char* topic_sub = "esp32/s3/command";
 
-  Wire.begin(18, 17);
+const char* ca_cert = \
+"-----BEGIN CERTIFICATE-----\n" \
+"MIIDrzCCApegAwIBAgIQCDvgVpBCRrGhdWrJWZHHSjANBgkqhkiG9w0BAQUFADBh\n" \
+"MQswCQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3\n" \
+"d3cuZGlnaWNlcnQuY29tMSAwHgYDVQQDExdEaWdpQ2VydCBHbG9iYWwgUm9vdCBD\n" \
+"QTAeFw0wNjExMTAwMDAwMDBaFw0zMTExMTAwMDAwMDBaMGExCzAJBgNVBAYTAlVT\n" \
+"MRUwEwYDVQQKEwxEaWdpQ2VydCBJbmMxGTAXBgNVBAsTEHd3dy5kaWdpY2VydC5j\n" \
+"b20xIDAeBgNVBAMTF0RpZ2lDZXJ0IEdsb2JhbCBSb290IENBMIIBIjANBgkqhkiG\n" \
+"9w0BAQEFAAOCAQ8AMIIBCgKCAQEA4jvhEXLeqKTTo1eqUKKPC3eQyaKl7hLOllsB\n" \
+"CSDMAZOnTjC3U/dDxGkAV53ijSLdhwZAAIEJzs4bg7/fzTtxRuLWZscFs3YnFo97\n" \
+"nh6Vfe63SKMI2tavegw5BmV/Sl0fvBf4q77uKNd0f3p4mVmFaG5cIzJLv07A6Fpt\n" \
+"43C/dxC//AH2hdmoRBBYMql1GNXRor5H4idq9Joz+EkIYIvUX7Q6hL+hqkpMfT7P\n" \
+"T19sdl6gSzeRntwi5m3OFBqOasv+zbMUZBfHWymeMr/y7vrTC0LUq7dBMtoM1O/4\n" \
+"gdW7jVg/tRvoSSiicNoxBN33shbyTApOB6jtSj1etX+jkMOvJwIDAQABo2MwYTAO\n" \
+"BgNVHQ8BAf8EBAMCAYYwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4EFgQUA95QNVbR\n" \
+"TLtm8KPiGxvDl7I90VUwHwYDVR0jBBgwFoAUA95QNVbRTLtm8KPiGxvDl7I90VUw\n" \
+"DQYJKoZIhvcNAQEFBQADggEBAMucN6pIExIK+t1EnE9SsPTfrgT1eXkIoyQY/Esr\n" \
+"hMAtudXH/vTBH1jLuG2cenTnmCmrEbXjcKChzUyImZOMkXDiqw8cvpOp/2PV5Adg\n" \
+"06O/nVsJ8dWO41P0jmP6P6fbtGbfYmbW0W5BjfIttep3Sp+dWOIrWcBAI+0tKIJF\n" \
+"PnlUkiaY4IBIqDfv8NZ5YBberOgOzW6sRBc4L0na4UU+Krk2U886UAb3LujEV0ls\n" \
+"YSEY1QSteDwsOoBrp+uvFRTp2InBuThs4pFsiv9kuXclVzDAGySj4dzp30d8tbQk\n" \
+"CAUw7C29C79Fv1C5qfPrmAESrciIxpg0X40KPMbp1ZWVbd4=\n" \
+"-----END CERTIFICATE-----\n";
 
-  if (!oled.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { Serial.println("OLED FAIL"); while (1); }
-  oled.clearDisplay();
-  oled.setTextColor(WHITE);
-  oled.setTextSize(2);
-  oled.setCursor(0, 20);
-  oled.println("Starting...");
-  oled.display();
+WiFiClientSecure espClient;
+PubSubClient client(espClient);
 
-  if (!bme.begin(0x76)) { Serial.println("BME280 FAIL"); while (1); }
-
+void setup_wifi() {
+  delay(10);
+  Serial.println("Connecting WiFi");
   WiFi.begin(ssid, password);
-  Serial.print("Connecting Wi-Fi");
-  while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
-  Serial.print("\nIP: "); Serial.println(WiFi.localIP());
-
-  server.on("/",        handleRoot);
-  server.on("/led/on",  handleLedOn);
-  server.on("/led/off", handleLedOff);
-  server.on("/data",    handleAjax);
-  server.begin();
+  while (WiFi.status() != WL_CONNECTED) delay(500);
+  Serial.println("WiFi connected");
 }
 
-void loop() {
-  server.handleClient();
-  if (millis() - lastSensor >= SENSOR_PERIOD) {
-    readSensor();
-    oledShow();
-    lastSensor = millis();
+void reconnect() {
+  while (!client.connected()) {
+    Serial.print("MQTT connect...");
+    if (client.connect(client_id, mqtt_user, mqtt_pass)) {
+      Serial.println("ok");
+      client.subscribe(topic_sub);
+    } else {
+      Serial.print("fail, rc=");
+      Serial.println(client.state());
+      delay(5000);
+    }
   }
 }
 
-void readSensor() {
-  t = bme.readTemperature();
-  h = bme.readHumidity();
-  p = bme.readPressure() / 100.0F;
+void setup() {
+  Serial.begin(115200);
+  setup_wifi();
+  espClient.setCACert(ca_cert);
+  client.setServer(mqtt_server, mqtt_port);
 }
 
-void oledShow() {
-  oled.clearDisplay();
-  oled.setTextSize(2);
-  oled.setCursor(0, 0);
-  oled.printf("T:%.1f C\n", t);
-  oled.printf("H:%.1f %%\n", h);
-  oled.printf("P:%.0f hPa", p);
-  oled.display();
-}
+void loop() {
+  if (!client.connected()) reconnect();
+  client.loop();
 
-void handleRoot() {
-  String html = R"rawliteral(
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>ESP32 Env Monitor</title>
-  <style>
-    body{font-family:Arial,Helvetica,sans-serif;text-align:center;background:#f2f2f2;margin:0;padding:40px 10px}
-    .card{background:#fff;border-radius:12px;max-width:400px;margin:auto;padding:25px;box-shadow:0 4px 10px rgba(0,0,0,.15)}
-    h1{font-size:28px;margin-bottom:20px;color:#333}
-    .data{font-size:26px;margin:8px 0;color:#007acc}
-    .btn-row{margin-top:25px}
-    button{font-size:20px;padding:12px 28px;margin:6px;border:none;border-radius:8px;cursor:pointer;transition:.3s}
-    .on{background:#4caf50;color:#fff}
-    .off{background:#f44336;color:#fff}
-    button:hover{opacity:.85}
-  </style>
-  <script>
-    function fetchData(){
-      fetch('/data').then(r=>r.json()).then(d=>{
-        document.getElementById('t').innerText   = d.t.toFixed(1);
-        document.getElementById('h').innerText   = d.h.toFixed(1);
-        document.getElementById('p').innerText   = d.p.toFixed(0);
-        document.getElementById('led').innerText = d.led ? "ON" : "OFF";
-      });
-    }
-    setInterval(fetchData,1000);
-    window.onload = fetchData;
-  </script>
-</head>
-<body>
-  <div class="card">
-    <h1>Env Monitor & LED</h1>
-    <div class="data">Temp: <span id="t">--</span> °C</div>
-    <div class="data">Hum:  <span id="h">--</span> %</div>
-    <div class="data">Pres: <span id="p">--</span> hPa</div>
-    <div class="data">LED:  <span id="led">--</span></div>
-    <div class="btn-row">
-      <form action="/led/on"  method="get" style="display:inline"><button class="on">ON</button></form>
-      <form action="/led/off" method="get" style="display:inline"><button class="off">OFF</button></form>
-    </div>
-  </div>
-</body>
-</html>)rawliteral";
-  server.send(200, "text/html; charset=UTF-8", html);
-}
-
-void handleLedOn() {
-  ledState = true;
-  digitalWrite(LED_PIN, HIGH);
-  server.sendHeader("Location", "/");
-  server.send(302);
-}
-
-void handleLedOff() {
-  ledState = false;
-  digitalWrite(LED_PIN, LOW);
-  server.sendHeader("Location", "/");
-  server.send(302);
-}
-
-void handleAjax() {
-  String json = "{\"t\":" + String(t, 1) + ",\"h\":" + String(h, 1) + ",\"p\":" + String(p, 0) + ",\"led\":" + String(ledState ? "true" : "false") + "}";
-  server.send(200, "application/json", json);
+  static unsigned long lastMsg = 0;
+  if (millis() - lastMsg > 5000) {
+    lastMsg = millis();
+    String msg = "Hello from ESP32-S3: " + String(millis());
+    client.publish(topic_pub, msg.c_str());
+    Serial.println("Published: " + msg);
+  }
 }
