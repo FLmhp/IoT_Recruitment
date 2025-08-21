@@ -47,8 +47,8 @@ constexpr uint16_t mqtt_port = 8883;
 const char* mqtt_user = "admin";
 const char* mqtt_pass = "admin";
 const char* mqtt_client = "ESP32-S3-Client-001";
-const char* topic_pub = "esp32/s3/data";
-const char* topic_sub = "esp32/s3/command";
+const char* topic_pub = "esp32s3/data";
+const char* topic_sub = "esp32s3/command";
 
 Adafruit_SSD1306 oled(SCREEN_W, SCREEN_H, &Wire, OLED_RESET);
 Adafruit_BME280  bme;
@@ -119,8 +119,8 @@ void setup() {
     .card{background:#fff;border-radius:12px;max-width:400px;margin:auto;padding:25px;box-shadow:0 4px 10px rgba(0,0,0,.15)}
     h1{font-size:28px;margin-bottom:20px;color:#333}
     .data{font-size:26px;margin:8px 0;color:#007acc}
-    .btn-row{margin-top:25px}
-    button{font-size:20px;padding:12px 28px;margin:6px;border:none;border-radius:8px;cursor:pointer}
+    .btn-row{margin-top:25px;display:flex;justify-content:center;gap:10px}
+    button{font-size:20px;padding:12px 28px;margin:6px;border:none;border-radius:8px;cursor:pointer;flex:1;max-width:150px}
     .on{background:#4caf50;color:#fff} .off{background:#f44336;color:#fff}
     button:hover{opacity:.85}
   </style>
