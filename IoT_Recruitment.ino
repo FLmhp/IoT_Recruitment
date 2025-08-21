@@ -1,52 +1,28 @@
-#include <WiFi.h>
-#include <WebServer.h>
+#include <Wire.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BME280.h>
 
-#define LED_PIN 45
-const char* ssid     = "CMCC-aquk";
-const char* password = "wfv5kabh";
+#define I2C_SDA 18
+#define I2C_SCL 17
 
-WebServer server(80);
-bool ledState = false;
-
-String getHTML() {
-  String html = R"rawliteral(
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <title>ESP32 LED Control</title>
-</head>
-<body>
-  <h1>ESP32 LED Control</h1>
-  <p>State: <b>)rawliteral";
-  html += (ledState ? "ON" : "OFF");
-  html += R"rawliteral(</b></p>
-  <form action="/led/on"  method="get"><button>ON</button></form><br>
-  <form action="/led/off" method="get"><button>OFF</button></form>
-</body>
-</html>)rawliteral";
-  return html;
-}
-
-void handleLedOn()  { ledState = true;  digitalWrite(LED_PIN, HIGH); server.send(200, "text/html; charset=UTF-8", getHTML()); }
-void handleLedOff() { ledState = false; digitalWrite(LED_PIN, LOW);  server.send(200, "text/html; charset=UTF-8", getHTML()); }
-void handleRoot()   { server.send(200, "text/html; charset=UTF-8", getHTML()); }
+Adafruit_BME280 bme;
 
 void setup() {
   Serial.begin(115200);
-  pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, LOW);
+  while (!Serial);
 
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
-  Serial.println("\nWi-Fi connected\nIP: " + WiFi.localIP().toString());
-
-  server.on("/", handleRoot);
-  server.on("/led/on", handleLedOn);
-  server.on("/led/off", handleLedOff);
-  server.begin();
+  Wire.begin(I2C_SDA, I2C_SCL);
+  if (!bme.begin(0x76, &Wire)) {
+    Serial.println("BME280 init failed");
+    while (1);
+  }
+  Serial.println("BME280 OK");
 }
 
 void loop() {
-  server.handleClient();
+  Serial.print("T: "); Serial.print(bme.readTemperature());  Serial.println(" C");
+  Serial.print("H: "); Serial.print(bme.readHumidity());     Serial.println(" %");
+  Serial.print("P: "); Serial.print(bme.readPressure() / 100.0F); Serial.println(" hPa");
+  Serial.println("-----");
+  delay(1000);
 }
