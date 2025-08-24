@@ -9,6 +9,12 @@
 #include <Adafruit_BME280.h>
 #include <Adafruit_SSD1306.h>
 
+#define LDR_PIN 4
+const uint8_t OLED_MIN = 1;
+const uint8_t OLED_MAX = 255;
+float ldrSmooth = 0;
+const float alpha = 0.05;
+
 static const char caCert[] PROGMEM = R"EOF(
 -----BEGIN CERTIFICATE-----
 MIIDrzCCApegAwIBAgIQCDvgVpBCRrGhdWrJWZHHSjANBgkqhkiG9w0BAQUFADBh
@@ -38,13 +44,15 @@ constexpr uint8_t LED_PIN  = 45;
 constexpr uint8_t SDA_PIN  = 18, SCL_PIN = 17;
 constexpr uint8_t OLED_RST = -1;
 constexpr uint8_t SCREEN_W = 128, SCREEN_H = 64;
-constexpr uint32_t SENSOR_PERIOD = 1000, OLED_PERIOD = 1000, MQTT_PERIOD = 5000;
+constexpr uint32_t SENSOR_PERIOD = 1000, OLED_PERIOD = 100,
+                   MQTT_PERIOD = 5000;
 
 const char* ssid       = "CMCC-aquk";
 const char* password   = "wfv5kabh";
 const char* mqtt_server = "n7e64e62.ala.cn-hangzhou.emqxsl.cn";
 constexpr uint16_t mqtt_port = 8883;
-const char* mqtt_user = "admin", *mqtt_pass = "admin", *mqtt_client = "ESP32-S3-Client-001";
+const char* mqtt_user = "admin", *mqtt_pass = "admin",
+           *mqtt_client = "ESP32-S3-Client-001";
 const char* topic_pub = "esp32s3/data", *topic_sub = "esp32s3/command";
 
 Adafruit_BME280  bme;
@@ -62,6 +70,7 @@ void tSensor(void*);
 void tOled(void*);
 void tMqtt(void*);
 void tWeb(void*);
+void tAutoBrightness(void*);
 void mqttCallback(char*, byte*, unsigned int);
 String makeWebPage();
 void webHandleRoot();
@@ -74,12 +83,26 @@ void setup() {
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
 
+  analogReadResolution(12);
+  analogSetPinAttenuation(LDR_PIN, ADC_11db);
+
   xQueueEnv = xQueueCreate(1, sizeof(EnvData_t));
   xLedMutex = xSemaphoreCreateMutex();
 
   Wire.begin(SDA_PIN, SCL_PIN);
-  if (!bme.begin(0x76)) { Serial.println("BME280 fail"); while (1); }
-  if (!oled.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { Serial.println("OLED fail"); while (1); }
+  Serial.println("Initializing BME280 sensor...");
+  if (!bme.begin(0x76)) { 
+    Serial.println("ERROR: BME280 initialization failed!");
+    while (1); 
+  }
+  Serial.println("BME280 sensor initialized successfully.");
+  
+  Serial.println("Initializing OLED display...");
+  if (!oled.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { 
+    Serial.println("ERROR: OLED initialization failed!");
+    while (1); 
+  }
+  Serial.println("OLED display initialized successfully.");
 
   oled.clearDisplay();
   oled.setTextColor(WHITE);
@@ -88,9 +111,16 @@ void setup() {
   oled.println("Booting...");
   oled.display();
 
+  Serial.print("Connecting to WiFi network: ");
+  Serial.println(ssid);
   WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
-  Serial.println(" " + WiFi.localIP().toString());
+  while (WiFi.status() != WL_CONNECTED) { 
+    delay(500); 
+    Serial.print("."); 
+  }
+  Serial.println(" WiFi connected successfully.");
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP().toString());
 
   net.setCACert(caCert);
   mqtt.setServer(mqtt_server, mqtt_port);
@@ -105,16 +135,34 @@ void setup() {
   ArduinoOTA.setHostname("esp32s3");
   ArduinoOTA.setPassword("admin");
   ArduinoOTA.begin();
-  Serial.println("OTA Ready");
+  Serial.println("OTA service started.");
 
-  xTaskCreatePinnedToCore(tSensor, "Sensor", 4096, NULL, 2, NULL, 1);
-  xTaskCreatePinnedToCore(tOled,   "Oled",   4096, NULL, 2, NULL, 1);
-  xTaskCreatePinnedToCore(tMqtt,   "Mqtt",   6144, NULL, 2, NULL, 1);
-  xTaskCreatePinnedToCore(tWeb,    "Web",    6144, NULL, 2, NULL, 1);
+  xTaskCreatePinnedToCore(tSensor,        "Sensor",   4096, NULL, 2, NULL, 1);
+  xTaskCreatePinnedToCore(tOled,          "Oled",     4096, NULL, 2, NULL, 1);
+  xTaskCreatePinnedToCore(tMqtt,          "Mqtt",     6144, NULL, 2, NULL, 1);
+  xTaskCreatePinnedToCore(tWeb,           "Web",      6144, NULL, 2, NULL, 1);
+  xTaskCreatePinnedToCore(tAutoBrightness,"AutoBrt", 2048, NULL, 2, NULL, 1);
   vTaskDelete(NULL);
 }
 
 void loop() {}
+
+void tAutoBrightness(void*) {
+  for (;;) {
+    int raw = analogRead(LDR_PIN);
+    ldrSmooth = alpha * raw + (1 - alpha) * ldrSmooth;
+
+    uint8_t contrast = map(
+        constrain((int)ldrSmooth, 0, 4095),
+        0, 4095,
+        OLED_MAX, OLED_MIN);
+
+    oled.ssd1306_command(SSD1306_SETCONTRAST);
+    oled.ssd1306_command(contrast);
+
+    vTaskDelay(pdMS_TO_TICKS(100));
+  }
+}
 
 void tSensor(void*) {
   EnvData_t env;
@@ -148,8 +196,18 @@ void tMqtt(void*) {
   TickType_t xLast = xTaskGetTickCount();
   for (;;) {
     if (!mqtt.connected()) {
-      Serial.println("MQTT reconnect");
-      if (mqtt.connect(mqtt_client, mqtt_user, mqtt_pass)) mqtt.subscribe(topic_sub);
+      Serial.println("Connecting to MQTT broker...");
+      if (mqtt.connect(mqtt_client, mqtt_user, mqtt_pass)) {
+        Serial.println("MQTT connected successfully.");
+        mqtt.subscribe(topic_sub);
+        Serial.print("Subscribed to topic: ");
+        Serial.println(topic_sub);
+      } else {
+        Serial.print("MQTT connection failed. Error code: ");
+        Serial.println(mqtt.state());
+        vTaskDelay(pdMS_TO_TICKS(5000));
+        continue;
+      }
     }
     mqtt.loop();
     if (xQueuePeek(xQueueEnv, &env, 0) == pdTRUE) {
@@ -160,7 +218,10 @@ void tMqtt(void*) {
       xSemaphoreGive(xLedMutex);
       char buf[128];
       serializeJson(doc, buf);
-      mqtt.publish(topic_pub, buf);
+      bool published = mqtt.publish(topic_pub, buf);
+      if (!published) {
+        Serial.println("ERROR: Failed to publish MQTT message.");
+      }
     }
     vTaskDelayUntil(&xLast, pdMS_TO_TICKS(MQTT_PERIOD));
   }
@@ -175,15 +236,28 @@ void tWeb(void*) {
 }
 
 void mqttCallback(char* t, byte* p, unsigned int l) {
+  Serial.print("MQTT message received on topic: ");
+  Serial.println(t);
+  
   JsonDocument doc;
   p[l] = 0;
-  deserializeJson(doc, (char*)p);
+  DeserializationError error = deserializeJson(doc, (char*)p);
+  if (error) {
+    Serial.print("ERROR: Failed to parse JSON. Error: ");
+    Serial.println(error.c_str());
+    return;
+  }
+  
   const char* cmd = doc["led"];
   if (cmd) {
     xSemaphoreTake(xLedMutex, portMAX_DELAY);
     ledState = !strcmp(cmd, "on");
     digitalWrite(LED_PIN, ledState);
     xSemaphoreGive(xLedMutex);
+    Serial.print("LED state changed to: ");
+    Serial.println(ledState ? "ON" : "OFF");
+  } else {
+    Serial.println("WARNING: Unknown command received via MQTT.");
   }
 }
 
