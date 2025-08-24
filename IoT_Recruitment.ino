@@ -1,3 +1,4 @@
+#include <ArduinoOTA.h>
 #include <WiFi.h>
 #include <WebServer.h>
 #include <Wire.h>
@@ -33,18 +34,16 @@ CAUw7C29C79Fv1C5qfPrmAESrciIxpg0X40KPMbp1ZWVbd4=
 -----END CERTIFICATE-----
 )EOF";
 
-constexpr uint8_t LED_PIN = 45;
-constexpr uint8_t SDA_PIN = 18, SCL_PIN = 17;
+constexpr uint8_t LED_PIN  = 45;
+constexpr uint8_t SDA_PIN  = 18, SCL_PIN = 17;
 constexpr uint8_t OLED_RST = -1;
 constexpr uint8_t SCREEN_W = 128, SCREEN_H = 64;
-constexpr uint32_t SENSOR_PERIOD = 1000;
-constexpr uint32_t OLED_PERIOD   = 1000;
-constexpr uint32_t MQTT_PERIOD   = 5000;
+constexpr uint32_t SENSOR_PERIOD = 1000, OLED_PERIOD = 1000, MQTT_PERIOD = 5000;
 
-const char* ssid     = "CMCC-aquk";
-const char* password = "wfv5kabh";
+const char* ssid       = "CMCC-aquk";
+const char* password   = "wfv5kabh";
 const char* mqtt_server = "n7e64e62.ala.cn-hangzhou.emqxsl.cn";
-const uint16_t mqtt_port = 8883;
+constexpr uint16_t mqtt_port = 8883;
 const char* mqtt_user = "admin", *mqtt_pass = "admin", *mqtt_client = "ESP32-S3-Client-001";
 const char* topic_pub = "esp32s3/data", *topic_sub = "esp32s3/command";
 
@@ -55,7 +54,6 @@ PubSubClient     mqtt(net);
 WebServer        web(80);
 
 typedef struct { float t, h, p; } EnvData_t;
-
 QueueHandle_t xQueueEnv = NULL;
 SemaphoreHandle_t xLedMutex = NULL;
 bool ledState = false;
@@ -83,11 +81,14 @@ void setup() {
   if (!bme.begin(0x76)) { Serial.println("BME280 fail"); while (1); }
   if (!oled.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { Serial.println("OLED fail"); while (1); }
 
-  oled.clearDisplay(); oled.setTextColor(WHITE); oled.setTextSize(2);
-  oled.setCursor(0, 20); oled.println("Booting..."); oled.display();
+  oled.clearDisplay();
+  oled.setTextColor(WHITE);
+  oled.setTextSize(2);
+  oled.setCursor(0, 20);
+  oled.println("Booting...");
+  oled.display();
 
   WiFi.begin(ssid, password);
-  Serial.print("Wi-Fi:");
   while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
   Serial.println(" " + WiFi.localIP().toString());
 
@@ -100,6 +101,11 @@ void setup() {
   web.on("/led/off", webHandleLedOff);
   web.on("/data", webHandleAjax);
   web.begin();
+
+  ArduinoOTA.setHostname("esp32s3");
+  ArduinoOTA.setPassword("admin");
+  ArduinoOTA.begin();
+  Serial.println("OTA Ready");
 
   xTaskCreatePinnedToCore(tSensor, "Sensor", 4096, NULL, 2, NULL, 1);
   xTaskCreatePinnedToCore(tOled,   "Oled",   4096, NULL, 2, NULL, 1);
@@ -147,7 +153,7 @@ void tMqtt(void*) {
     }
     mqtt.loop();
     if (xQueuePeek(xQueueEnv, &env, 0) == pdTRUE) {
-      StaticJsonDocument<256> doc;
+      JsonDocument doc;
       doc["t"] = env.t; doc["h"] = env.h; doc["p"] = env.p;
       xSemaphoreTake(xLedMutex, portMAX_DELAY);
       doc["led"] = ledState;
@@ -161,11 +167,15 @@ void tMqtt(void*) {
 }
 
 void tWeb(void*) {
-  for (;;) { web.handleClient(); vTaskDelay(pdMS_TO_TICKS(10)); }
+  for (;;) {
+    web.handleClient();
+    ArduinoOTA.handle();
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
 }
 
 void mqttCallback(char* t, byte* p, unsigned int l) {
-  StaticJsonDocument<128> doc;
+  JsonDocument doc;
   p[l] = 0;
   deserializeJson(doc, (char*)p);
   const char* cmd = doc["led"];
@@ -190,12 +200,9 @@ String makeWebPage() {
     .card{background:#fff;border-radius:12px;max-width:400px;margin:auto;padding:25px;box-shadow:0 4px 10px rgba(0,0,0,.15)}
     h1{font-size:28px;margin-bottom:20px;color:#333}
     .data{font-size:26px;margin:8px 0;color:#007acc}
-    .btn-row{margin-top:25px}
-    button{font-size:20px;padding:12px 28px;margin:6px;border:none;border-radius:8px;cursor:pointer}
-    .on{background:#4caf50;color:#fff} .off{background:#f44336;color:#fff}
-    button:hover{opacity:.85}
-    .btn-container {display: flex; justify-content: center; gap: 10px;}
-    form {display: inline-block; margin: 0;}
+    .btn-container{display:flex;justify-content:center;gap:10px}
+    button{font-size:20px;padding:12px 28px;border:none;border-radius:8px;cursor:pointer}
+    .on{background:#4caf50;color:#fff}.off{background:#f44336;color:#fff}button:hover{opacity:.85}
   </style>
   <script>
     function fetchData(){
@@ -213,15 +220,13 @@ String makeWebPage() {
 <body>
   <div class="card">
     <h1>Env & LED Control</h1>
-    <div class="data">Temp: <span id="t">--</span> °C</div>
-    <div class="data">Hum:  <span id="h">--</span> %</div>
-    <div class="data">Pres: <span id="p">--</span> hPa</div>
-    <div class="data">LED:  <span id="led">--</span></div>
-    <div class="btn-row">
-      <div class="btn-container">
-        <form action="/led/on" method="get"><button class="on">ON</button></form>
-        <form action="/led/off" method="get"><button class="off">OFF</button></form>
-      </div>
+    <div class="data">Temp:<span id="t">--</span>°C</div>
+    <div class="data">Hum:<span id="h">--</span>%</div>
+    <div class="data">Pres:<span id="p">--</span>hPa</div>
+    <div class="data">LED:<span id="led">--</span></div>
+    <div class="btn-container">
+      <form action="/led/on" method="get"><button class="on">ON</button></form>
+      <form action="/led/off" method="get"><button class="off">OFF</button></form>
     </div>
   </div>
 </body>
@@ -243,7 +248,7 @@ void webHandleLedOff() {
 }
 void webHandleAjax() {
   EnvData_t env;
-  StaticJsonDocument<256> doc;
+  JsonDocument doc;
   if (xQueuePeek(xQueueEnv, &env, 0) == pdTRUE) doc["t"] = env.t, doc["h"] = env.h, doc["p"] = env.p;
   else doc["t"] = 0, doc["h"] = 0, doc["p"] = 0;
   xSemaphoreTake(xLedMutex, portMAX_DELAY); doc["led"] = ledState; xSemaphoreGive(xLedMutex);
